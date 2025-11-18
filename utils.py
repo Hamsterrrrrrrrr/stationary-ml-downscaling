@@ -270,3 +270,102 @@ def create_dataloaders(ds, variables, norm_stats,
     print(f"  Val batches: {len(val_loader)}")
     
     return train_loader, val_loader
+
+
+def create_residual_dataloaders(ds, variables, norm_stats,
+                                train_period=('1850', '1980'),
+                                val_period=('1981', '2000'),
+                                batch_size=128,
+                                input_type='raw'):
+    """
+    Create dataloaders specifically for residual prediction experiments.
+    Always uses zscore_pixel normalization and residual as target.
+    
+    Args:
+        ds: xarray Dataset containing residual and detrended variants
+        variables: List of HR variable names (e.g., ['pr_hr', 'tas_hr'])
+        norm_stats: Normalization statistics for zscore_pixel
+        train_period, val_period: Time periods for train/val splits
+        batch_size: Batch size for DataLoader
+        input_type: One of 'raw', 'detrend_gma', 'detrend_grid', 'detrend_gmt'
+    
+    Returns:
+        train_loader, val_loader
+    """
+    x_train_list = []
+    x_val_list = []
+    y_train_list = []
+    y_val_list = []
+    
+    for var in variables:
+        var_base = var.replace('_hr', '')
+        
+        # Target is always residual
+        target_var = f"{var_base}_residual"
+        
+        # Select input based on input_type
+        if input_type == 'raw':
+            input_var = f"{var_base}_lr_interp"
+            input_key = 'lr_interp'
+        else:
+            input_var = f"{var_base}_lr_{input_type}"
+            input_key = f'lr_{input_type}'
+        
+        # Extract data
+        hr_train = ds[target_var].sel(time=slice(train_period[0], train_period[1])).values
+        hr_val = ds[target_var].sel(time=slice(val_period[0], val_period[1])).values
+        lr_train = ds[input_var].sel(time=slice(train_period[0], train_period[1])).values
+        lr_val = ds[input_var].sel(time=slice(val_period[0], val_period[1])).values
+        
+        # Apply zscore_pixel normalization
+        hr_mean = norm_stats[var_base]['residual']['pixel_mean']
+        hr_std = norm_stats[var_base]['residual']['pixel_std']
+        lr_mean = norm_stats[var_base][input_key]['pixel_mean']
+        lr_std = norm_stats[var_base][input_key]['pixel_std']
+        
+        x_train = (lr_train - lr_mean) / (lr_std + 1e-8)
+        x_val = (lr_val - lr_mean) / (lr_std + 1e-8)
+        y_train = (hr_train - hr_mean) / (hr_std + 1e-8)
+        y_val = (hr_val - hr_mean) / (hr_std + 1e-8)
+        
+        x_train_list.append(x_train)
+        x_val_list.append(x_val)
+        y_train_list.append(y_train)
+        y_val_list.append(y_val)
+    
+    # Stack channels
+    if len(variables) == 1:
+        x_train = np.expand_dims(x_train_list[0], axis=1)
+        x_val = np.expand_dims(x_val_list[0], axis=1)
+        y_train = np.expand_dims(y_train_list[0], axis=1)
+        y_val = np.expand_dims(y_val_list[0], axis=1)
+    else:
+        x_train = np.stack(x_train_list, axis=1)
+        x_val = np.stack(x_val_list, axis=1)
+        y_train = np.stack(y_train_list, axis=1)
+        y_val = np.stack(y_val_list, axis=1)
+    
+    print(f"\nDataset shapes:")
+    print(f"  x_train: {x_train.shape}")
+    print(f"  y_train: {y_train.shape}")
+    print(f"  x_val: {x_val.shape}")
+    print(f"  y_val: {y_val.shape}")
+    
+    # Convert to PyTorch tensors
+    x_train = torch.tensor(x_train, dtype=torch.float32)
+    x_val = torch.tensor(x_val, dtype=torch.float32)
+    y_train = torch.tensor(y_train, dtype=torch.float32)
+    y_val = torch.tensor(y_val, dtype=torch.float32)
+    
+    # Create datasets and dataloaders
+    train_dataset = TensorDataset(x_train, y_train)
+    val_dataset = TensorDataset(x_val, y_val)
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    print(f"\nDataLoaders created:")
+    print(f"  Train batches: {len(train_loader)}")
+    print(f"  Val batches: {len(val_loader)}")
+    
+    return train_loader, val_loader
