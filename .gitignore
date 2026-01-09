@@ -2,3 +2,5 @@ ckpts/
 data/
 evaluation_results/
 evaluation_results_residual/
+evaluation_results_old/
+evaluation_results_residual_old/
